@@ -4,16 +4,27 @@
 
 extern crate alloc;
 
+mod disco;
 mod fs;
+mod graficos;
 mod hardware;
 mod interrupciones;
 mod memoria;
+mod raton;
+mod shell;
 mod tareas;
 mod vga_buffer;
 
-use bootloader as _;
+use alloc::string::String;
+use bootloader::{entry_point, BootInfo};
+use core::fmt::Write;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicU64, Ordering};
 use vga_buffer::PANTALLA_GLOBAL;
+
+pub static OFFSET_MEMORIA_FISICA: AtomicU64 = AtomicU64::new(0);
+
+entry_point!(kernel_main);
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -37,27 +48,41 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
+fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    OFFSET_MEMORIA_FISICA.store(boot_info.physical_memory_offset, Ordering::Relaxed);
+
     memoria::inicializar_heap();
     tareas::inicializar_tareas();
+    fs::inicializar_ruta_base();
+    disco::inicializar_bus_ata();
+    raton::inicializar_raton();
 
-    fs::crear_archivo("readme.txt", "Bienvenido a melac_os v0.9! Escribe 'htop' para ver procesos.");
-    fs::crear_archivo(
-        "demo.ms",
-        "color cian\nprint === Ejecutando programa en melac_os ===\ncolor amarillo\nprint Hola desde MelacScript!\nbeep\ncolor verde",
-    );
+    let estado_montaje = disco::montar_disco_instalado();
 
     {
         let mut pantalla = PANTALLA_GLOBAL.lock();
-        pantalla.limpiar_pantalla();
-        pantalla.escribir_texto("========================================\n");
-        pantalla.escribir_texto("       BIENVENIDO A MELAC_OS v0.9       \n");
-        pantalla.escribir_texto("========================================\n\n");
-        pantalla.escribir_texto("[OK] Planificador Multitarea y Barra en vivo activos.\n");
-        pantalla.escribir_texto("[OK] Ejecuta 'htop' para ver el consumo de CPU y RAM.\n\n");
-        pantalla.escribir_texto("melac_os> ");
+        pantalla.activar_cursor_hardware();
+        pantalla.limpiar_desde_fila(1);
+        pantalla.escribir_texto("==================================================\n");
+        pantalla.escribir_texto("       BIENVENIDO A MELAC_OS SERVER v1.9          \n");
+        pantalla.escribir_texto("==================================================\n\n");
+
+        match estado_montaje {
+            Ok(n) => {
+                *fs::SISTEMA_INSTALADO.lock() = true;
+                *fs::DIRECTORIO_ACTUAL.lock() = String::from("/home/usuario");
+                pantalla.cambiar_color(vga_buffer::Color::CianClaro, vga_buffer::Color::Negro);
+                let _ = writeln!(pantalla, "[OK] Disco duro montado en '/' ({} nodos activos).", n);
+                pantalla.escribir_texto("[OK] Documentacion completa en ~/manual_comandos.txt\n\n");
+            }
+            Err(_) => {
+                pantalla.cambiar_color(vga_buffer::Color::Amarillo, vga_buffer::Color::Negro);
+                pantalla.escribir_texto("[MODO LIVE-CD] Ejecuta 'install' para instalar melac_os Server.\n\n");
+            }
+        }
     }
+    shell::imprimir_prompt();
+    shell::actualizar_barra_superior(0);
 
     interrupciones::inicializar_idt();
     unsafe {
