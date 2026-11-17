@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod fs;
+mod hardware;
 mod interrupciones;
 mod memoria;
 mod vga_buffer;
@@ -39,17 +40,21 @@ fn panic(info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     memoria::inicializar_heap();
 
-    // Creamos un archivo inicial en nuestro sistema de archivos en RAM
-    fs::crear_archivo("readme.txt", "Bienvenido a melac_os! Este archivo vive en el Heap.");
+    // Creamos archivos iniciales en RAM, incluido un programa ejecutable 'demo.ms'
+    fs::crear_archivo("readme.txt", "Bienvenido a melac_os v0.8! Usa 'edit' para crear archivos.");
+    fs::crear_archivo(
+        "demo.ms",
+        "color cian\nprint === Ejecutando programa en melac_os ===\ncolor amarillo\nprint Hola desde mi propio interprete de scripts!\nbeep\ncolor verde",
+    );
 
     {
         let mut pantalla = PANTALLA_GLOBAL.lock();
         pantalla.limpiar_pantalla();
         pantalla.escribir_texto("========================================\n");
-        pantalla.escribir_texto("       BIENVENIDO A MELAC_OS v0.6       \n");
+        pantalla.escribir_texto("       BIENVENIDO A MELAC_OS v0.8       \n");
         pantalla.escribir_texto("========================================\n\n");
-        pantalla.escribir_texto("[OK] Heap Allocator (100 KiB) y RamFS listos.\n");
-        pantalla.escribir_texto("[OK] Interrupciones (IDT) y Teclado activos.\n\n");
+        pantalla.escribir_texto("[OK] Heap (100 KiB), RamFS y MelacEdit activos.\n");
+        pantalla.escribir_texto("[OK] Controlador Hardware ACPI/PS2 y MelacScript listos.\n\n");
         pantalla.escribir_texto("melac_os> ");
     }
 
