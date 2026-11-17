@@ -1,3 +1,8 @@
+use crate::fs::{borrar_archivo, crear_archivo, leer_archivo, SISTEMA_ARCHIVOS};
+use crate::interrupciones::TICS_RELOJ;
+use alloc::vec::Vec;
+use core::fmt::{self, Write};
+use core::sync::atomic::Ordering;
 use spin::Mutex;
 
 #[allow(dead_code)]
@@ -27,7 +32,6 @@ pub struct EscritorVGA {
     fila_actual: usize,
     codigo_color: u8,
     buffer: *mut u8,
-    // Búfer de hasta 64 letras para guardar el comando que el usuario está escribiendo
     linea_comando: [u8; 64],
     longitud_comando: usize,
 }
@@ -73,18 +77,15 @@ impl EscritorVGA {
         }
     }
 
-    // Procesa cada tecla pulsada por el usuario
     pub fn procesar_tecla(&mut self, byte: u8) {
         match byte {
             b'\n' => {
-                // El usuario presionó ENTER: bajamos de línea y ejecutamos el comando
                 self.nueva_linea();
                 self.ejecutar_comando();
-                self.longitud_comando = 0; // Vaciamos el búfer para el siguiente comando
+                self.longitud_comando = 0;
                 self.escribir_texto("melac_os> ");
             }
             0x08 => {
-                // Tecla BACKSPACE: borramos en pantalla y quitamos 1 letra del búfer
                 if self.longitud_comando > 0 {
                     self.longitud_comando -= 1;
                     self.columna_actual -= 1;
@@ -92,7 +93,6 @@ impl EscritorVGA {
                 }
             }
             byte => {
-                // Guardamos la letra si cabe en los 64 espacios y la dibujamos
                 if self.longitud_comando < 64 && self.columna_actual < 79 {
                     self.linea_comando[self.longitud_comando] = byte;
                     self.longitud_comando += 1;
@@ -103,55 +103,123 @@ impl EscritorVGA {
         }
     }
 
-    // El cerebro de nuestra Shell: compara los bytes escritos con comandos conocidos
-        fn ejecutar_comando(&mut self) {
-        // Hacemos una copia local de los 64 bytes para no mantener prestado 'self'
+    fn ejecutar_comando(&mut self) {
         let copia_buffer = self.linea_comando;
         let slice = &copia_buffer[..self.longitud_comando];
 
-        if let Ok(comando) = core::str::from_utf8(slice) {
+        if let Ok(linea) = core::str::from_utf8(slice) {
+            let linea = linea.trim();
+            if linea.is_empty() {
+                return;
+            }
+
+            let partes: Vec<&str> = linea.splitn(3, ' ').collect();
+            let comando = partes[0];
+
             match comando {
-                "" => {}
                 "help" => {
                     self.cambiar_color(Color::CianClaro, Color::Negro);
-                    self.escribir_texto("Comandos disponibles en melac_os:\n");
-                    self.escribir_texto("  help  - Muestra esta lista de ayuda\n");
-                    self.escribir_texto("  info  - Muestra informacion del kernel y hardware\n");
-                    self.escribir_texto("  clear - Limpia la pantalla\n");
-                    self.escribir_texto("  panic - Simula un error critico del sistema\n");
+                    self.escribir_texto("Comandos de melac_os v0.6:\n");
+                    self.escribir_texto("  ls                  - Lista archivos en RAM\n");
+                    self.escribir_texto("  touch <nom> <txt>   - Crea un archivo con texto\n");
+                    self.escribir_texto("  cat <nom>           - Lee el contenido de un archivo\n");
+                    self.escribir_texto("  rm <nom>            - Borra un archivo de la RAM\n");
+                    self.escribir_texto("  info / uptime / clear / panic\n");
                     self.cambiar_color(Color::VerdeClaro, Color::Negro);
                 }
                 "info" => {
                     self.cambiar_color(Color::Amarillo, Color::Negro);
-                    self.escribir_texto("Sistema: melac_os v0.3 (MKernel)\n");
-                    self.escribir_texto("Arquitectura: x86_64 Bare Metal (Sin SO anfitrion)\n");
-                    self.escribir_texto("Memoria Video: VGA Text Buffer 80x25 (0xb8000)\n");
+                    self.escribir_texto("Sistema: melac_os v0.6 (MKernel + RamFS)\n");
+                    self.escribir_texto("Arquitectura: x86_64 Bare Metal | Heap: 100 KiB\n");
+                    self.cambiar_color(Color::VerdeClaro, Color::Negro);
+                }
+                "uptime" => {
+                    let tics = TICS_RELOJ.load(Ordering::Relaxed);
+                    let segundos = (tics * 10) / 182;
+                    self.cambiar_color(Color::CianClaro, Color::Negro);
+                    let _ = writeln!(self, "Tiempo encendido: {} segundos ({} tics)", segundos, tics);
+                    self.cambiar_color(Color::VerdeClaro, Color::Negro);
+                }
+                "ls" => {
+                    let archivos = SISTEMA_ARCHIVOS.lock();
+                    self.cambiar_color(Color::Amarillo, Color::Negro);
+                    if archivos.is_empty() {
+                        self.escribir_texto("(Directorio vacio. Usa 'touch archivo.txt hola')\n");
+                    } else {
+                        for arch in archivos.iter() {
+                            let _ = writeln!(self, "  - {} ({} bytes)", arch.nombre, arch.contenido.len());
+                        }
+                    }
+                    self.cambiar_color(Color::VerdeClaro, Color::Negro);
+                }
+                "touch" => {
+                    if partes.len() < 2 {
+                        self.cambiar_color(Color::RojoClaro, Color::Negro);
+                        self.escribir_texto("Uso: touch <nombre> [contenido]\n");
+                    } else {
+                        let nombre = partes[1];
+                        let contenido = if partes.len() == 3 { partes[2] } else { "" };
+                        crear_archivo(nombre, contenido);
+                        self.cambiar_color(Color::CianClaro, Color::Negro);
+                        let _ = writeln!(self, "Archivo '{}' guardado en RAM.", nombre);
+                    }
+                    self.cambiar_color(Color::VerdeClaro, Color::Negro);
+                }
+                "cat" => {
+                    if partes.len() < 2 {
+                        self.cambiar_color(Color::RojoClaro, Color::Negro);
+                        self.escribir_texto("Uso: cat <nombre>\n");
+                    } else {
+                        let nombre = partes[1];
+                        match leer_archivo(nombre) {
+                            Some(texto) => {
+                                self.cambiar_color(Color::Blanco, Color::Negro);
+                                let _ = writeln!(self, "{}", texto);
+                            }
+                            None => {
+                                self.cambiar_color(Color::RojoClaro, Color::Negro);
+                                let _ = writeln!(self, "Error: El archivo '{}' no existe.", nombre);
+                            }
+                        }
+                    }
+                    self.cambiar_color(Color::VerdeClaro, Color::Negro);
+                }
+                "rm" => {
+                    if partes.len() < 2 {
+                        self.cambiar_color(Color::RojoClaro, Color::Negro);
+                        self.escribir_texto("Uso: rm <nombre>\n");
+                    } else {
+                        let nombre = partes[1];
+                        if borrar_archivo(nombre) {
+                            self.cambiar_color(Color::Amarillo, Color::Negro);
+                            let _ = writeln!(self, "Archivo '{}' eliminado.", nombre);
+                        } else {
+                            self.cambiar_color(Color::RojoClaro, Color::Negro);
+                            let _ = writeln!(self, "Error: No existe '{}'.", nombre);
+                        }
+                    }
                     self.cambiar_color(Color::VerdeClaro, Color::Negro);
                 }
                 "clear" => {
                     self.limpiar_pantalla();
                 }
                 "panic" => {
-                    panic!("Pánico provocado manualmente desde la Shell!");
+                    panic!("Panico provocado manualmente desde la Shell!");
                 }
                 desconocido => {
                     self.cambiar_color(Color::RojoClaro, Color::Negro);
-                    self.escribir_texto("Comando desconocido: '");
-                    self.escribir_texto(desconocido);
-                    self.escribir_texto("'. Escribe 'help'.\n");
+                    let _ = writeln!(self, "Comando desconocido: '{}'. Escribe 'help'.", desconocido);
                     self.cambiar_color(Color::VerdeClaro, Color::Negro);
                 }
             }
         }
     }
 
-
     fn nueva_linea(&mut self) {
         self.columna_actual = 0;
         if self.fila_actual < 24 {
             self.fila_actual += 1;
         } else {
-            // Si llegamos abajo del todo, subimos todas las filas 1 espacio (Scroll)
             self.hacer_scroll();
         }
     }
@@ -166,7 +234,6 @@ impl EscritorVGA {
                     *self.buffer.add(destino + 1) = *self.buffer.add(origen + 1);
                 }
             }
-            // Limpiamos la última fila (fila 24)
             for col in 0..80 {
                 self.escribir_caracter_en(b' ', 24, col);
             }
@@ -179,5 +246,12 @@ impl EscritorVGA {
             *self.buffer.add(posicion) = byte;
             *self.buffer.add(posicion + 1) = self.codigo_color;
         }
+    }
+}
+
+impl fmt::Write for EscritorVGA {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.escribir_texto(s);
+        Ok(())
     }
 }

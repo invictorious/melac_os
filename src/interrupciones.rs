@@ -1,9 +1,12 @@
+use core::sync::atomic::{AtomicU64, Ordering};
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use crate::vga_buffer::PANTALLA_GLOBAL;
+
+pub static TICS_RELOJ: AtomicU64 = AtomicU64::new(0);
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -27,6 +30,8 @@ pub fn inicializar_idt() {
 }
 
 extern "x86-interrupt" fn manejador_reloj(_stack_frame: InterruptStackFrame) {
+    TICS_RELOJ.fetch_add(1, Ordering::Relaxed);
+
     unsafe {
         PICS.lock().notify_end_of_interrupt(32);
     }
