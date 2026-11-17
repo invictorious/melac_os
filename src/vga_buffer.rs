@@ -1,6 +1,8 @@
 use crate::fs::{borrar_archivo, crear_archivo, leer_archivo, SISTEMA_ARCHIVOS};
 use crate::hardware::{apagar_sistema, emitir_beep, reiniciar_sistema};
 use crate::interrupciones::TICS_RELOJ;
+use crate::memoria::TAMANO_HEAP;
+use crate::tareas::{EstadoTarea, PLANIFICADOR};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
@@ -51,7 +53,7 @@ unsafe impl Send for EscritorVGA {}
 
 pub static PANTALLA_GLOBAL: Mutex<EscritorVGA> = Mutex::new(EscritorVGA {
     columna_actual: 0,
-    fila_actual: 0,
+    fila_actual: 1,
     codigo_color: ((Color::Negro as u8) << 4) | (Color::VerdeClaro as u8),
     buffer: 0xb8000 as *mut u8,
     linea_comando: [0; 64],
@@ -66,14 +68,49 @@ impl EscritorVGA {
         self.codigo_color = ((fondo as u8) << 4) | (texto as u8);
     }
 
+    // Dibuja la barra superior en vivo (Fila 0) sin mover el cursor donde escribes
+    pub fn dibujar_barra_estado(&mut self, tics: u64) {
+        if self.modo == ModoSistema::Editor {
+            return; // En modo editor dejamos su propia barra azul
+        }
+
+        let fila_guardada = self.fila_actual;
+        let col_guardada = self.columna_actual;
+        let color_guardado = self.codigo_color;
+
+        self.cambiar_color(Color::Negro, Color::CianClaro);
+        for col in 0..80 {
+            self.escribir_caracter_en(b' ', 0, col);
+        }
+
+        let segundos = (tics * 10) / 182;
+        let num_archivos = SISTEMA_ARCHIVOS.try_lock().map(|a| a.len()).unwrap_or(0);
+        let num_tareas = PLANIFICADOR.try_lock().map(|t| t.len()).unwrap_or(0);
+
+        self.fila_actual = 0;
+        self.columna_actual = 1;
+        let _ = write!(
+            self,
+            "MELAC_OS v0.9 | Tareas: {} | Archivos: {} | Uptime: {}s ({} tics)",
+            num_tareas, num_archivos, segundos, tics
+        );
+
+        // Restauramos exactamente la posición y el color donde estaba escribiendo el usuario
+        self.fila_actual = fila_guardada;
+        self.columna_actual = col_guardada;
+        self.codigo_color = color_guardado;
+    }
+
     pub fn limpiar_pantalla(&mut self) {
-        for fila in 0..25 {
+        for fila in 1..25 {
             for col in 0..80 {
                 self.escribir_caracter_en(b' ', fila, col);
             }
         }
-        self.fila_actual = 0;
+        self.fila_actual = 1;
         self.columna_actual = 0;
+        let tics = TICS_RELOJ.load(Ordering::Relaxed);
+        self.dibujar_barra_estado(tics);
     }
 
     pub fn escribir_texto(&mut self, texto: &str) {
@@ -91,12 +128,73 @@ impl EscritorVGA {
         }
     }
 
+    fn mostrar_htop(&mut self) {
+        self.cambiar_color(Color::Blanco, Color::Azul);
+        self.escribir_texto("================ MONITOR DE RECURSOS MELAC_OS (HTOP) ================\n");
+
+        let tics = TICS_RELOJ.load(Ordering::Relaxed);
+        let segundos = (tics * 10) / 182;
+
+        if let Some(tareas) = PLANIFICADOR.try_lock() {
+            let ram_usada: usize = tareas.iter().map(|t| t.ram_kb).sum();
+            let ram_total = TAMANO_HEAP / 1024;
+
+            self.cambiar_color(Color::CianClaro, Color::Negro);
+            let _ = writeln!(
+                self,
+                "CPU: x86_64 1 Core [Activo] | Uptime: {}s | Heap RAM: {}/{} KiB",
+                segundos, ram_usada, ram_total
+            );
+
+            // Dibujamos una barra visual de carga de memoria
+            self.escribir_texto("MEM [");
+            let bloques = (ram_usada * 20) / ram_total;
+            for i in 0..20 {
+                if i < bloques {
+                    self.escribir_texto("#");
+                } else {
+                    self.escribir_texto("-");
+                }
+            }
+            let _ = writeln!(self, "] {}%\n", (ram_usada * 100) / ram_total);
+
+            self.cambiar_color(Color::Negro, Color::GrisClaro);
+            self.escribir_texto(
+                "  PID   ESTADO       RAM (KiB)   TICS CPU   PROCESO KERNEL                   \n",
+            );
+
+            for t in tareas.iter() {
+                let estado_txt = match t.estado {
+                    EstadoTarea::Ejecutando => {
+                        self.cambiar_color(Color::VerdeClaro, Color::Negro);
+                        "EJECUTANDO"
+                    }
+                    EstadoTarea::Esperando => {
+                        self.cambiar_color(Color::Amarillo, Color::Negro);
+                        "ESPERANDO "
+                    }
+                };
+                let _ = writeln!(
+                    self,
+                    "  {:02}    {}   {:>6} KiB   {:>8}   {}",
+                    t.pid, estado_txt, t.ram_kb, t.tics_cpu, t.nombre
+                );
+            }
+        }
+        self.cambiar_color(Color::VerdeClaro, Color::Negro);
+        self.escribir_texto("=====================================================================\n");
+    }
+
     fn abrir_editor(&mut self, nombre: &str) {
         self.modo = ModoSistema::Editor;
         self.archivo_editando = String::from(nombre);
         self.contenido_editor = leer_archivo(nombre).unwrap_or_else(String::new);
 
-        self.limpiar_pantalla();
+        for fila in 0..25 {
+            for col in 0..80 {
+                self.escribir_caracter_en(b' ', fila, col);
+            }
+        }
 
         self.cambiar_color(Color::Blanco, Color::Azul);
         for col in 0..80 {
@@ -128,7 +226,11 @@ impl EscritorVGA {
         self.cambiar_color(Color::VerdeClaro, Color::Negro);
         self.limpiar_pantalla();
         self.cambiar_color(Color::CianClaro, Color::Negro);
-        let _ = writeln!(self, "[OK] Archivo '{}' guardado en RAM.\n", nombre_guardado);
+        let _ = writeln!(
+            self,
+            "[OK] Archivo '{}' guardado correctamente en RAM.\n",
+            nombre_guardado
+        );
         self.cambiar_color(Color::VerdeClaro, Color::Negro);
         self.escribir_texto("melac_os> ");
     }
@@ -199,7 +301,6 @@ impl EscritorVGA {
         }
     }
 
-    // Intérprete MelacScript: ejecuta instrucciones línea por línea desde un archivo
     fn ejecutar_script(&mut self, codigo: &str) {
         for linea in codigo.lines() {
             let linea = linea.trim();
@@ -254,14 +355,15 @@ impl EscritorVGA {
             match comando {
                 "help" => {
                     self.cambiar_color(Color::CianClaro, Color::Negro);
-                    self.escribir_texto("Comandos de melac_os v0.8:\n");
+                    self.escribir_texto("Comandos de melac_os v0.9:\n");
+                    self.escribir_texto("  htop              - Monitor de procesos y memoria RAM\n");
                     self.escribir_texto("  edit <nom>        - Abre el editor de texto (ESC guarda)\n");
                     self.escribir_texto("  run <nom>         - Ejecuta un script MelacScript (.ms)\n");
                     self.escribir_texto("  ls / cat / touch / rm - Gestion de archivos en RAM\n");
-                    self.escribir_texto("  beep / uptime / info / clear\n");
-                    self.escribir_texto("  reboot / shutdown / panic - Control de hardware\n");
+                    self.escribir_texto("  beep / uptime / info / clear / reboot / shutdown / panic\n");
                     self.cambiar_color(Color::VerdeClaro, Color::Negro);
                 }
+                "htop" => self.mostrar_htop(),
                 "edit" => {
                     if partes.len() < 2 {
                         self.cambiar_color(Color::RojoClaro, Color::Negro);
@@ -280,7 +382,11 @@ impl EscritorVGA {
                             Some(codigo) => self.ejecutar_script(&codigo),
                             None => {
                                 self.cambiar_color(Color::RojoClaro, Color::Negro);
-                                let _ = writeln!(self, "Error: No existe el script '{}'.", partes[1]);
+                                let _ = writeln!(
+                                    self,
+                                    "Error: No existe el script '{}'.",
+                                    partes[1]
+                                );
                             }
                         }
                     }
@@ -302,7 +408,7 @@ impl EscritorVGA {
                 }
                 "info" => {
                     self.cambiar_color(Color::Amarillo, Color::Negro);
-                    self.escribir_texto("Sistema: melac_os v0.8 (MKernel + RamFS + MelacScript)\n");
+                    self.escribir_texto("Sistema: melac_os v0.9 (Multitasking Kernel)\n");
                     self.escribir_texto("Arquitectura: x86_64 Bare Metal | Heap: 100 KiB\n");
                     self.cambiar_color(Color::VerdeClaro, Color::Negro);
                 }
@@ -360,7 +466,11 @@ impl EscritorVGA {
                             }
                             None => {
                                 self.cambiar_color(Color::RojoClaro, Color::Negro);
-                                let _ = writeln!(self, "Error: El archivo '{}' no existe.", nombre);
+                                let _ = writeln!(
+                                    self,
+                                    "Error: El archivo '{}' no existe.",
+                                    nombre
+                                );
                             }
                         }
                     }
@@ -412,7 +522,8 @@ impl EscritorVGA {
 
     fn hacer_scroll(&mut self) {
         unsafe {
-            let inicio_fila = if self.modo == ModoSistema::Editor { 3 } else { 1 };
+            // Protegemos la fila 0 (barra superior) o las filas 0..2 del editor
+            let inicio_fila = if self.modo == ModoSistema::Editor { 3 } else { 2 };
             for fila in inicio_fila..25 {
                 for col in 0..80 {
                     let origen = (fila * 80 + col) * 2;

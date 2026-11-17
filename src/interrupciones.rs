@@ -4,6 +4,7 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+use crate::tareas::tic_planificador;
 use crate::vga_buffer::PANTALLA_GLOBAL;
 
 pub static TICS_RELOJ: AtomicU64 = AtomicU64::new(0);
@@ -30,7 +31,15 @@ pub fn inicializar_idt() {
 }
 
 extern "x86-interrupt" fn manejador_reloj(_stack_frame: InterruptStackFrame) {
-    TICS_RELOJ.fetch_add(1, Ordering::Relaxed);
+    let tics = TICS_RELOJ.fetch_add(1, Ordering::Relaxed) + 1;
+
+    tic_planificador(tics);
+
+    if tics % 18 == 0 {
+        if let Some(mut pantalla) = PANTALLA_GLOBAL.try_lock() {
+            pantalla.dibujar_barra_estado(tics);
+        }
+    }
 
     unsafe {
         PICS.lock().notify_end_of_interrupt(32);
