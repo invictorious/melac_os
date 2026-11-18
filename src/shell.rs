@@ -1168,9 +1168,9 @@ impl EstadoShell {
                         }
                         "install" if partes.len() >= 3 => {
                             let pkg = partes[2];
-                            let ruta_repo = format!("/var/mpm/repo/{}.ms", pkg);
+                            let ruta_repo = format!("/var/mpm/repo/{}.mpm", pkg);
                             if let Some(contenido) = leer_archivo(&ruta_repo) {
-                                crear_archivo(&format!("/bin/{}.ms", pkg), &contenido);
+                                crear_archivo(&format!("/bin/{}.mpm", pkg), &contenido);
                                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
                                 let _ = writeln!(p, "[MPM] Paquete '{}' instalado en /bin/.", pkg);
                             } else {
@@ -1180,7 +1180,7 @@ impl EstadoShell {
                         }
                         "remove" if partes.len() >= 3 => {
                             let pkg = partes[2];
-                            let ruta_bin = format!("/bin/{}.ms", pkg);
+                            let ruta_bin = format!("/bin/{}.mpm", pkg);
                             if leer_archivo(&ruta_bin).is_some() {
                                 let _ = borrar_nodo(&ruta_bin);
                                 p.cambiar_color(Color::Amarillo, Color::Negro);
@@ -1607,10 +1607,41 @@ impl EstadoShell {
                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
             otro => {
-                // Si no es un comando nativo, buscamos si hay un script .ms en /bin/
-                let ruta_bin = format!("/bin/{}.ms", otro);
-                if let Some(codigo) = leer_archivo(&ruta_bin) {
-                    self.ejecutar_script(&codigo);
+                // Buscamos si el comando existe en /bin con extensión .mpm o .ms
+                let ruta_mpm = format!("/bin/{}.mpm", otro);
+                let ruta_ms = format!("/bin/{}.ms", otro);
+                
+                let mut contenido = None;
+                let mut es_elf = false;
+
+                if let Some(c) = leer_archivo(&ruta_mpm) {
+                    if c.starts_with("f0VMR") { es_elf = true; }
+                    contenido = Some(c);
+                } else if let Some(c) = leer_archivo(&ruta_ms) {
+                    contenido = Some(c);
+                }
+
+                if let Some(codigo) = contenido {
+                    if es_elf {
+                        let mut p = PANTALLA_GLOBAL.lock();
+                        p.cambiar_color(Color::Amarillo, Color::Negro);
+                        let _ = writeln!(p, "[KERNEL] Cargando paquete .mpm (ELF64)...");
+                        p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                        drop(p); // Liberamos pantalla
+
+                        use base64::{Engine as _, engine::general_purpose};
+                        let bytes = general_purpose::STANDARD.decode(codigo.trim()).unwrap_or_default();
+                        
+                        if let Err(e) = crate::elf::cargar_y_ejecutar(&bytes) {
+                            let mut p2 = PANTALLA_GLOBAL.lock();
+                            p2.cambiar_color(Color::RojoClaro, Color::Negro);
+                            let _ = writeln!(p2, "[ERROR ELF] {}", e);
+                            p2.cambiar_color(Color::VerdeClaro, Color::Negro);
+                        }
+                    } else {
+                        // Es un script de texto .ms
+                        self.ejecutar_script(&codigo);
+                    }
                 } else {
                     let mut p = PANTALLA_GLOBAL.lock();
                     p.cambiar_color(Color::RojoClaro, Color::Negro);

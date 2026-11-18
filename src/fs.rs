@@ -400,11 +400,7 @@ pub fn inicializar_repositorio_mpm() {
         "color verde\n"
     );
 
-    let pkg_hola = concat!(
-        "color verde\n",
-        "print Hola, este es un paquete instalado con MPM!\n",
-        "print Si ves esto, la ejecucion automatica funciona.\n"
-    );
+    let pkg_hola = "";
 
     let pkg_reloj = concat!(
         "color cian\n",
@@ -412,6 +408,6 @@ pub fn inicializar_repositorio_mpm() {
     );
 
     nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/neofetch.ms"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_neofetch) });
-    nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/hola.ms"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_hola) });
+    nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/hola.mpm"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_hola) });
     nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/reloj.ms"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_reloj) });
 }

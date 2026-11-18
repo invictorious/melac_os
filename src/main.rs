@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod disco;
+mod elf;
 mod fs;
 mod graficos;
 mod hardware;
