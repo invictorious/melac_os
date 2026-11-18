@@ -11,6 +11,7 @@ mod hardware;
 mod interrupciones;
 mod memoria;
 mod raton;
+mod rtc;
 mod shell;
 mod tareas;
 mod vga_buffer;

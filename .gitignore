@@ -1,3 +1,7 @@
 /target
 **/*.rs.bk
+<<<<<<< HEAD
+=======
+*.img
+>>>>>>> 050b9dc (feat: melac_os Server v3.0 - tree, find, grep -r, stat, file, hexdump, date RTC, free, lscpu, history, du, nano, cowsay, fortune)
 *.vdi

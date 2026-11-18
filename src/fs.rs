@@ -20,6 +20,16 @@ pub struct NodoFS {
 pub static SISTEMA_ARCHIVOS: Mutex<Vec<NodoFS>> = Mutex::new(Vec::new());
 pub static DIRECTORIO_ACTUAL: Mutex<String> = Mutex::new(String::new());
 pub static SISTEMA_INSTALADO: Mutex<bool> = Mutex::new(false);
+pub static KERNEL_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn log_kernel(mensaje: &str) {
+    if let Some(mut logs) = KERNEL_LOGS.try_lock() {
+        if logs.len() >= 40 {
+            logs.remove(0);
+        }
+        logs.push(String::from(mensaje));
+    }
+}
 
 pub fn inicializar_ruta_base() {
     *DIRECTORIO_ACTUAL.lock() = String::from("/");
@@ -29,36 +39,12 @@ pub fn instalar_en_disco_duro() -> Result<usize, &'static str> {
     {
         let mut nodos = SISTEMA_ARCHIVOS.lock();
         nodos.clear();
-        nodos.push(NodoFS {
-            ruta: String::from("/"),
-            tipo: TipoNodo::Directorio,
-            contenido: String::new(),
-        });
-        nodos.push(NodoFS {
-            ruta: String::from("/boot"),
-            tipo: TipoNodo::Directorio,
-            contenido: String::new(),
-        });
-        nodos.push(NodoFS {
-            ruta: String::from("/bin"),
-            tipo: TipoNodo::Directorio,
-            contenido: String::new(),
-        });
-        nodos.push(NodoFS {
-            ruta: String::from("/etc"),
-            tipo: TipoNodo::Directorio,
-            contenido: String::new(),
-        });
-        nodos.push(NodoFS {
-            ruta: String::from("/home"),
-            tipo: TipoNodo::Directorio,
-            contenido: String::new(),
-        });
-        nodos.push(NodoFS {
-            ruta: String::from("/home/usuario"),
-            tipo: TipoNodo::Directorio,
-            contenido: String::new(),
-        });
+        nodos.push(NodoFS { ruta: String::from("/"), tipo: TipoNodo::Directorio, contenido: String::new() });
+        nodos.push(NodoFS { ruta: String::from("/boot"), tipo: TipoNodo::Directorio, contenido: String::new() });
+        nodos.push(NodoFS { ruta: String::from("/bin"), tipo: TipoNodo::Directorio, contenido: String::new() });
+        nodos.push(NodoFS { ruta: String::from("/etc"), tipo: TipoNodo::Directorio, contenido: String::new() });
+        nodos.push(NodoFS { ruta: String::from("/home"), tipo: TipoNodo::Directorio, contenido: String::new() });
+        nodos.push(NodoFS { ruta: String::from("/home/usuario"), tipo: TipoNodo::Directorio, contenido: String::new() });
 
         let bytes_reales_kernel = unsafe { core::slice::from_raw_parts(0x200000 as *const u8, 64) };
         let mut volcado_hex = String::from("ELF64_KERNEL_HDR: ");
@@ -84,32 +70,28 @@ pub fn instalar_en_disco_duro() -> Result<usize, &'static str> {
         nodos.push(NodoFS {
             ruta: String::from("/home/usuario/bienvenida.txt"),
             tipo: TipoNodo::Archivo,
-            contenido: String::from(
-                "Bienvenido a melac_os Server v1.9! Lee manual_comandos.txt para ver toda la guia.",
-            ),
+            contenido: String::from("Bienvenido a melac_os Server v2.0! Lee manual_comandos.txt para ver toda la guia."),
         });
 
         let manual = concat!(
-            "=== MANUAL OFICIAL DE COMANDOS MELAC_OS SERVER ===\n",
-            "1. ARCHIVOS Y CARPETAS:\n",
-            "   ls [ruta]           - Lista archivos y carpetas\n",
-            "   cd <ruta>           - Cambia de directorio (ej: cd .., cd /etc)\n",
-            "   pwd                 - Muestra la ruta actual\n",
+            "=== MANUAL OFICIAL DE COMANDOS MELAC_OS SERVER v2.0 ===\n",
+            "1. NAVEGACION Y ARCHIVOS (Soporta '~' para /home/usuario):\n",
+            "   ls [-l] [ruta]      - Lista archivos (usa -l para formato detallado)\n",
+            "   cd <ruta>           - Cambia de directorio (ej: cd ~, cd .., cd /etc)\n",
+            "   pwd                 - Muestra el directorio actual\n",
             "   mkdir <dir>         - Crea una carpeta nueva\n",
             "   touch <arch> [txt]  - Crea un archivo rapido\n",
-            "   edit <arch>         - Editor estilo nano (^O Guardar, ^X Salir)\n",
-            "   cat <arch>          - Muestra el contenido de un archivo\n",
-            "   cp <orig> <dest>    - Copia un archivo\n",
-            "   mv <orig> <dest>    - Mueve o renombra un archivo\n",
-            "   rm <ruta>           - Elimina un archivo o carpeta\n",
-            "   grep <txt> <arch>   - Busca texto dentro de un archivo\n",
+            "   edit <arch>         - Editor nano (Flechas 4 dir, ^O Guardar, ^X Salir)\n",
+            "   cat / head / tail   - Lee todo, primeras 10 o ultimas 10 lineas\n",
+            "   wc <arch>           - Cuenta lineas, palabras y bytes\n",
+            "   cp / mv / rm        - Copia, mueve/renombra o elimina archivos\n",
+            "   grep <txt> <arch>   - Busca coincidencias en un archivo\n",
             "   echo <txt> > <arch> - Escribe o anade (>>) texto a un archivo\n",
-            "2. SISTEMA Y MONITORIZACION:\n",
-            "   view_resources      - Monitor en tiempo real (CPU, RAM, Disco). Pulsa Q para salir\n",
-            "   df                  - Muestra espacio usado y libre en disco\n",
-            "   whoami / hostname / env / uptime\n",
-            "   install / sync      - Instala o sincroniza el disco duro\n",
-            "   clear (^L) / reboot / shutdown / gui\n"
+            "2. SISTEMA Y SERVIDOR:\n",
+            "   view_resources      - Monitor en tiempo real (CPU, RAM, Disco). Q salir\n",
+            "   dmesg               - Muestra los registros internos del Kernel\n",
+            "   df                  - Espacio usado y libre en disco duro\n",
+            "   whoami / hostname / env / uptime / install / sync / reboot / shutdown\n"
         );
 
         nodos.push(NodoFS {
@@ -121,6 +103,7 @@ pub fn instalar_en_disco_duro() -> Result<usize, &'static str> {
 
     *SISTEMA_INSTALADO.lock() = true;
     *DIRECTORIO_ACTUAL.lock() = String::from("/home/usuario");
+    log_kernel("fs: sistema instalado y formateado en /dev/hdb1 (MELACFS3)");
     sincronizar_disco()
 }
 
@@ -140,7 +123,6 @@ pub fn estadisticas_disco() -> (usize, usize, usize) {
     (usados, total_bytes, nodos.len())
 }
 
-// Calcula la memoria Heap real ocupada por el sistema de archivos y estructuras
 pub fn memoria_fs_bytes() -> usize {
     let nodos = SISTEMA_ARCHIVOS.lock();
     let mut total = nodos.capacity() * core::mem::size_of::<NodoFS>();
@@ -150,23 +132,30 @@ pub fn memoria_fs_bytes() -> usize {
     total
 }
 
+// Soporta rutas absolutas (/etc), relativas (notas.txt) y virgulilla (~ o ~/notas.txt)
 pub fn resolver_ruta(entrada: &str) -> String {
-    let actual = DIRECTORIO_ACTUAL.lock().clone();
-    let base = if entrada.starts_with('/') {
-        String::from(entrada)
-    } else if actual == "/" {
-        format!("/{}", entrada)
+    let expandida = if entrada == "~" {
+        String::from("/home/usuario")
+    } else if let Some(resto) = entrada.strip_prefix("~/") {
+        format!("/home/usuario/{}", resto)
     } else {
-        format!("{}/{}", actual, entrada)
+        String::from(entrada)
+    };
+
+    let actual = DIRECTORIO_ACTUAL.lock().clone();
+    let base = if expandida.starts_with('/') {
+        expandida
+    } else if actual == "/" {
+        format!("/{}", expandida)
+    } else {
+        format!("{}/{}", actual, expandida)
     };
 
     let mut partes_limpias: Vec<&str> = Vec::new();
     for parte in base.split('/') {
         match parte {
             "" | "." => {}
-            ".." => {
-                partes_limpias.pop();
-            }
+            ".." => { partes_limpias.pop(); }
             p => partes_limpias.push(p),
         }
     }
@@ -179,16 +168,12 @@ pub fn resolver_ruta(entrada: &str) -> String {
 }
 
 pub fn nombre_base(ruta: &str) -> &str {
-    if ruta == "/" {
-        return "/";
-    }
+    if ruta == "/" { return "/"; }
     ruta.rsplit('/').next().unwrap_or(ruta)
 }
 
 pub fn carpeta_padre(ruta: &str) -> String {
-    if ruta == "/" {
-        return String::from("/");
-    }
+    if ruta == "/" { return String::from("/"); }
     match ruta.rfind('/') {
         Some(0) | None => String::from("/"),
         Some(idx) => String::from(&ruta[..idx]),
@@ -219,7 +204,6 @@ pub fn crear_directorio(ruta_entrada: &str) -> Result<String, &'static str> {
 pub fn cambiar_directorio(ruta_entrada: &str) -> Result<String, &'static str> {
     let ruta = resolver_ruta(ruta_entrada);
     let nodos = SISTEMA_ARCHIVOS.lock();
-
     if nodos.iter().any(|n| n.ruta == ruta && n.tipo == TipoNodo::Directorio) {
         *DIRECTORIO_ACTUAL.lock() = ruta.clone();
         Ok(ruta)
@@ -232,7 +216,6 @@ pub fn crear_archivo(ruta_entrada: &str, contenido: &str) {
     let ruta = resolver_ruta(ruta_entrada);
     {
         let mut nodos = SISTEMA_ARCHIVOS.lock();
-        // Eliminamos duplicados previos si existieran y actualizamos limpio
         let mut actualizado = false;
         for nodo in nodos.iter_mut() {
             if nodo.ruta == ruta && nodo.tipo == TipoNodo::Archivo {
@@ -275,29 +258,20 @@ pub fn leer_archivo(ruta_entrada: &str) -> Option<String> {
 pub fn copiar_archivo(origen_in: &str, destino_in: &str) -> Result<(), &'static str> {
     let origen = resolver_ruta(origen_in);
     let mut destino = resolver_ruta(destino_in);
-
     if origen == destino {
         return Err("El origen y el destino son el mismo archivo");
     }
-
     let contenido = leer_archivo(&origen).ok_or("El archivo de origen no existe")?;
-
     {
         let nodos = SISTEMA_ARCHIVOS.lock();
         if nodos.iter().any(|n| n.ruta == destino && n.tipo == TipoNodo::Directorio) {
             let nom = nombre_base(&origen);
-            destino = if destino == "/" {
-                format!("/{}", nom)
-            } else {
-                format!("{}/{}", destino, nom)
-            };
+            destino = if destino == "/" { format!("/{}", nom) } else { format!("{}/{}", destino, nom) };
         }
     }
-
     if origen == destino {
         return Err("El archivo ya se encuentra en ese directorio");
     }
-
     crear_archivo(&destino, &contenido);
     Ok(())
 }
@@ -314,20 +288,12 @@ pub fn mover_nodo(origen_in: &str, destino_in: &str) -> Result<(), &'static str>
         let mut nodos = SISTEMA_ARCHIVOS.lock();
         if nodos.iter().any(|n| n.ruta == destino && n.tipo == TipoNodo::Directorio) {
             let nom = nombre_base(&origen);
-            destino = if destino == "/" {
-                format!("/{}", nom)
-            } else {
-                format!("{}/{}", destino, nom)
-            };
+            destino = if destino == "/" { format!("/{}", nom) } else { format!("{}/{}", destino, nom) };
         }
         if origen == destino {
             return Err("El origen y el destino son iguales");
         }
-        // Si ya existía un archivo en el destino, lo eliminamos antes para no crear duplicados
-        if let Some(pos_dup) = nodos
-            .iter()
-            .position(|n| n.ruta == destino && n.tipo == TipoNodo::Archivo)
-        {
+        if let Some(pos_dup) = nodos.iter().position(|n| n.ruta == destino && n.tipo == TipoNodo::Archivo) {
             nodos.remove(pos_dup);
         }
         if let Some(pos) = nodos.iter().position(|n| n.ruta == origen) {
@@ -355,4 +321,59 @@ pub fn borrar_nodo(ruta_entrada: &str) -> Result<(), &'static str> {
     }
     auto_guardar();
     Ok(())
+}
+
+// ========= HELPERS PARA COMANDOS AVANZADOS =========
+pub fn obtener_nodo(ruta_entrada: &str) -> Option<NodoFS> {
+    let ruta = resolver_ruta(ruta_entrada);
+    SISTEMA_ARCHIVOS.lock().iter().find(|n| n.ruta == ruta).cloned()
+}
+
+pub fn listar_hijos(dir: &str) -> Vec<NodoFS> {
+    let dir = resolver_ruta(dir);
+    let mut hijos: Vec<NodoFS> = SISTEMA_ARCHIVOS.lock().iter()
+        .filter(|n| n.ruta != "/" && carpeta_padre(&n.ruta) == dir)
+        .cloned()
+        .collect();
+    hijos.sort_by(|a, b| match (a.tipo, b.tipo) {
+        (TipoNodo::Directorio, TipoNodo::Archivo) => core::cmp::Ordering::Less,
+        (TipoNodo::Archivo, TipoNodo::Directorio) => core::cmp::Ordering::Greater,
+        _ => a.ruta.cmp(&b.ruta),
+    });
+    hijos
+}
+
+pub fn tamano_recursivo(ruta_entrada: &str) -> usize {
+    let ruta = resolver_ruta(ruta_entrada);
+    let nodos = SISTEMA_ARCHIVOS.lock();
+    let prefijo = if ruta == "/" { String::from("/") } else { format!("{}/", ruta) };
+    let mut total = 0;
+    for n in nodos.iter() {
+        if n.tipo == TipoNodo::Archivo && (n.ruta == ruta || n.ruta.starts_with(&prefijo)) {
+            total += n.contenido.len();
+        }
+    }
+    total
+}
+
+pub fn buscar_por_nombre(patron: &str) -> Vec<NodoFS> {
+    SISTEMA_ARCHIVOS.lock().iter()
+        .filter(|n| n.ruta != "/" && nombre_base(&n.ruta).contains(patron))
+        .cloned()
+        .collect()
+}
+
+pub fn buscar_en_archivos(patron: &str) -> Vec<(String, usize, String)> {
+    let nodos = SISTEMA_ARCHIVOS.lock();
+    let mut resultados = Vec::new();
+    for n in nodos.iter() {
+        if n.tipo == TipoNodo::Archivo {
+            for (num, l) in n.contenido.lines().enumerate() {
+                if l.contains(patron) {
+                    resultados.push((n.ruta.clone(), num + 1, String::from(l)));
+                }
+            }
+        }
+    }
+    resultados
 }
