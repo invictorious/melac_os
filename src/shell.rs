@@ -202,6 +202,36 @@ pub fn refrescar_monitor_vivo(tics: u64) {
 }
 
 impl EstadoShell {
+    fn ejecutar_script(&mut self, codigo: &str) {
+        for l in codigo.lines() {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') { continue; }
+            let inst: Vec<&str> = l.splitn(2, ' ').collect();
+            match inst[0] {
+                "print" => {
+                    let mut p = PANTALLA_GLOBAL.lock();
+                    if inst.len() > 1 { let _ = writeln!(p, "{}", inst[1]); } else { p.nueva_linea(1); }
+                }
+                "color" if inst.len() > 1 => {
+                    let mut p = PANTALLA_GLOBAL.lock();
+                    match inst[1] {
+                        "verde" => p.cambiar_color(Color::VerdeClaro, Color::Negro),
+                        "cian" => p.cambiar_color(Color::CianClaro, Color::Negro),
+                        "amarillo" => p.cambiar_color(Color::Amarillo, Color::Negro),
+                        "rojo" => p.cambiar_color(Color::RojoClaro, Color::Negro),
+                        "blanco" => p.cambiar_color(Color::Blanco, Color::Negro),
+                        "gris" => p.cambiar_color(Color::GrisClaro, Color::Negro),
+                        _ => {}
+                    }
+                }
+                "clear" => PANTALLA_GLOBAL.lock().limpiar_desde_fila(1),
+                "beep" => emitir_beep(),
+                _ => {}
+            }
+        }
+        PANTALLA_GLOBAL.lock().cambiar_color(Color::VerdeClaro, Color::Negro);
+    }
+
     pub fn actualizar_raton_grafico(&mut self, x: usize, y: usize, clic_izq: bool) {
         if self.modo != ModoSistema::Grafico { return; }
         self.cursor_x = x;
@@ -258,7 +288,7 @@ impl EstadoShell {
             let comandos = [
                 "install", "help", "view_resources", "mkdir", "cd", "pwd", "mv", "cp",
                 "edit", "run", "sync", "ls", "cat", "head", "tail", "wc", "touch", "rm",
-                "grep", "echo", "sort", "uniq", "dmesg", "whoami", "hostname", "env", "df", "gui", "clear",
+                "grep", "echo", "mpm", "sort", "uniq", "dmesg", "whoami", "hostname", "env", "df", "gui", "clear",
                 "reboot", "shutdown", "tree", "find", "stat", "file", "hexdump",
                 "date", "time", "free", "lscpu", "history", "du", "cowsay", "fortune", "calc", "ps", "uptime",
             ];
@@ -992,7 +1022,7 @@ impl EstadoShell {
                             }
                         }
                     }
-                }
+                    }
                 }
                 if encontrados == 0 {
                     p.cambiar_color(Color::GrisClaro, Color::Negro);
@@ -1102,38 +1132,71 @@ impl EstadoShell {
                     p.escribir_texto("Uso: run <archivo.ms>\n");
                     p.cambiar_color(Color::VerdeClaro, Color::Negro);
                 } else if let Some(codigo) = leer_archivo(partes[1]) {
-                    for l in codigo.lines() {
-                        let l = l.trim();
-                        if l.is_empty() || l.starts_with('#') { continue; }
-                        let inst: Vec<&str> = l.splitn(2, ' ').collect();
-                        match inst[0] {
-                            "print" => {
-                                let mut p = PANTALLA_GLOBAL.lock();
-                                if inst.len() > 1 { let _ = writeln!(p, "{}", inst[1]); } else { p.nueva_linea(1); }
-                            }
-                            "color" if inst.len() > 1 => {
-                                let mut p = PANTALLA_GLOBAL.lock();
-                                match inst[1] {
-                                    "verde" => p.cambiar_color(Color::VerdeClaro, Color::Negro),
-                                    "cian" => p.cambiar_color(Color::CianClaro, Color::Negro),
-                                    "amarillo" => p.cambiar_color(Color::Amarillo, Color::Negro),
-                                    "rojo" => p.cambiar_color(Color::RojoClaro, Color::Negro),
-                                    "blanco" => p.cambiar_color(Color::Blanco, Color::Negro),
-                                    _ => {}
-                                }
-                            }
-                            "clear" => PANTALLA_GLOBAL.lock().limpiar_desde_fila(1),
-                            "beep" => emitir_beep(),
-                            _ => {}
-                        }
-                    }
-                    PANTALLA_GLOBAL.lock().cambiar_color(Color::VerdeClaro, Color::Negro);
+                    self.ejecutar_script(&codigo);
                 } else {
                     let mut p = PANTALLA_GLOBAL.lock();
                     p.cambiar_color(Color::RojoClaro, Color::Negro);
                     let _ = writeln!(p, "Error: No existe '{}'.", partes[1]);
                     p.cambiar_color(Color::VerdeClaro, Color::Negro);
                 }
+            }
+            "mpm" => {
+                let mut p = PANTALLA_GLOBAL.lock();
+                if partes.len() < 2 {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    p.escribir_texto("Uso: mpm <list|install|remove> [paquete]\n");
+                } else {
+                    match partes[1] {
+                        "list" => {
+                            p.cambiar_color(Color::CianClaro, Color::Negro);
+                            p.escribir_texto("Repositorio MPM (/var/mpm/repo):\n");
+                            let nodos = SISTEMA_ARCHIVOS.lock();
+                            for n in nodos.iter() {
+                                if carpeta_padre(&n.ruta) == "/var/mpm/repo" {
+                                    let nom = nombre_base(&n.ruta).replace(".ms", "");
+                                    let ruta_bin = format!("/bin/{}.ms", nom);
+                                    let instalado = nodos.iter().any(|x| x.ruta == ruta_bin);
+                                    if instalado {
+                                        p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                                        let _ = writeln!(p, "  [INSTALADO] {}", nom);
+                                    } else {
+                                        p.cambiar_color(Color::Blanco, Color::Negro);
+                                        let _ = writeln!(p, "  [DISPONIBLE] {}", nom);
+                                    }
+                                }
+                            }
+                        }
+                        "install" if partes.len() >= 3 => {
+                            let pkg = partes[2];
+                            let ruta_repo = format!("/var/mpm/repo/{}.ms", pkg);
+                            if let Some(contenido) = leer_archivo(&ruta_repo) {
+                                crear_archivo(&format!("/bin/{}.ms", pkg), &contenido);
+                                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                                let _ = writeln!(p, "[MPM] Paquete '{}' instalado en /bin/.", pkg);
+                            } else {
+                                p.cambiar_color(Color::RojoClaro, Color::Negro);
+                                let _ = writeln!(p, "[MPM] El paquete '{}' no existe en el repositorio.", pkg);
+                            }
+                        }
+                        "remove" if partes.len() >= 3 => {
+                            let pkg = partes[2];
+                            let ruta_bin = format!("/bin/{}.ms", pkg);
+                            if leer_archivo(&ruta_bin).is_some() {
+                                let _ = borrar_nodo(&ruta_bin);
+                                p.cambiar_color(Color::Amarillo, Color::Negro);
+                                let _ = writeln!(p, "[MPM] Paquete '{}' eliminado de /bin/.", pkg);
+                            } else {
+                                p.cambiar_color(Color::RojoClaro, Color::Negro);
+                                let _ = writeln!(p, "[MPM] El paquete '{}' no esta instalado.", pkg);
+                            }
+                        }
+                        _ => {
+                            p.cambiar_color(Color::RojoClaro, Color::Negro);
+                            p.escribir_texto("Uso: mpm <list|install|remove> [paquete]\n");
+                        }
+                    }
+                }
+                p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
             "gui" => {
                 self.modo = ModoSistema::Grafico;
@@ -1544,10 +1607,16 @@ impl EstadoShell {
                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
             otro => {
-                let mut p = PANTALLA_GLOBAL.lock();
-                p.cambiar_color(Color::RojoClaro, Color::Negro);
-                let _ = writeln!(p, "Comando desconocido: '{}'. Escribe 'help'.", otro);
-                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                // Si no es un comando nativo, buscamos si hay un script .ms en /bin/
+                let ruta_bin = format!("/bin/{}.ms", otro);
+                if let Some(codigo) = leer_archivo(&ruta_bin) {
+                    self.ejecutar_script(&codigo);
+                } else {
+                    let mut p = PANTALLA_GLOBAL.lock();
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    let _ = writeln!(p, "Comando desconocido: '{}'. Escribe 'help'.", otro);
+                    p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                }
             }
         }
     }
@@ -1778,4 +1847,5 @@ fn dibujar_arbol(
         }
         *contador += 1;
     }
+
 }

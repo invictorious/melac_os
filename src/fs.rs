@@ -104,6 +104,7 @@ pub fn instalar_en_disco_duro() -> Result<usize, &'static str> {
     *SISTEMA_INSTALADO.lock() = true;
     *DIRECTORIO_ACTUAL.lock() = String::from("/home/usuario");
     log_kernel("fs: sistema instalado y formateado en /dev/hdb1 (MELACFS3)");
+    inicializar_repositorio_mpm();
     sincronizar_disco()
 }
 
@@ -376,4 +377,41 @@ pub fn buscar_en_archivos(patron: &str) -> Vec<(String, usize, String)> {
         }
     }
     resultados
+}
+
+pub fn inicializar_repositorio_mpm() {
+    let mut nodos = SISTEMA_ARCHIVOS.lock();
+    nodos.push(NodoFS { ruta: String::from("/var"), tipo: TipoNodo::Directorio, contenido: String::new() });
+    nodos.push(NodoFS { ruta: String::from("/var/mpm"), tipo: TipoNodo::Directorio, contenido: String::new() });
+    nodos.push(NodoFS { ruta: String::from("/var/mpm/repo"), tipo: TipoNodo::Directorio, contenido: String::new() });
+
+    let pkg_neofetch = concat!(
+        "color cian\n",
+        "print   /\\_/\\  \n",
+        "print  ( o.o )  MELAC_OS SERVER v3.1\n",
+        "print   > ^ <   Hecho en Rust puro\n",
+        "color amarillo\n",
+        "print -------------------------\n",
+        "color blanco\n",
+        "print SO: melac_os x86_64\n",
+        "print Kernel: MKernel v3.1\n",
+        "print Shell: melac_sh (v3.6)\n",
+        "print Terminal: VGA Text 80x25\n",
+        "color verde\n"
+    );
+
+    let pkg_hola = concat!(
+        "color verde\n",
+        "print Hola, este es un paquete instalado con MPM!\n",
+        "print Si ves esto, la ejecucion automatica funciona.\n"
+    );
+
+    let pkg_reloj = concat!(
+        "color cian\n",
+        "print Consulta la hora en la barra superior o escribe 'date'.\n"
+    );
+
+    nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/neofetch.ms"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_neofetch) });
+    nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/hola.ms"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_hola) });
+    nodos.push(NodoFS { ruta: String::from("/var/mpm/repo/reloj.ms"), tipo: TipoNodo::Archivo, contenido: String::from(pkg_reloj) });
 }
