@@ -65,7 +65,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         pantalla.activar_cursor_hardware();
         pantalla.limpiar_desde_fila(1);
         pantalla.escribir_texto("==================================================\n");
-        pantalla.escribir_texto("       BIENVENIDO A MELAC_OS SERVER v1.9          \n");
+        pantalla.escribir_texto("       BIENVENIDO A MELAC_OS SERVER v3.1          \n");
         pantalla.escribir_texto("==================================================\n\n");
 
         match estado_montaje {

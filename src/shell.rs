@@ -125,7 +125,7 @@ pub fn actualizar_barra_superior(tics: u64) {
         p.columna_actual = 1;
         let _ = write!(
             p,
-            "MELAC_OS Server v2.0 [{}] | Nodos: {} | RAM: 1MiB | Uptime: {}s",
+            "MELAC_OS Server v3.1 [{}] | Nodos: {} | RAM: 1MiB | Uptime: {}s",
             estado_disco, num_nodos, segundos
         );
         p.fila_actual = fila_guardada;
@@ -258,9 +258,9 @@ impl EstadoShell {
             let comandos = [
                 "install", "help", "view_resources", "mkdir", "cd", "pwd", "mv", "cp",
                 "edit", "run", "sync", "ls", "cat", "head", "tail", "wc", "touch", "rm",
-                "grep", "echo", "dmesg", "whoami", "hostname", "env", "df", "gui", "clear",
+                "grep", "echo", "sort", "uniq", "dmesg", "whoami", "hostname", "env", "df", "gui", "clear",
                 "reboot", "shutdown", "tree", "find", "stat", "file", "hexdump",
-                "date", "time", "free", "lscpu", "history", "du", "cowsay", "fortune", "nano",
+                "date", "time", "free", "lscpu", "history", "du", "cowsay", "fortune", "calc", "ps", "uptime",
             ];
             for cmd in comandos.iter() {
                 if cmd.starts_with(texto_hasta_cursor) {
@@ -665,11 +665,19 @@ impl EstadoShell {
     }
 
     fn ejecutar_comando(&mut self) {
-        let linea = self.buffer_cmd.trim().to_string();
-        if linea.is_empty() { return; }
-        self.historial.push(linea.clone());
+        let linea_original = self.buffer_cmd.trim().to_string();
+        if linea_original.is_empty() { return; }
+        self.historial.push(linea_original.clone());
         self.indice_historial = self.historial.len();
 
+        // --- SOPORTE PARA PIPELINES (|) ---
+        if linea_original.contains('|') {
+            self.ejecutar_pipeline(&linea_original);
+            return;
+        }
+
+        // --- SOPORTE PARA COMODINES (*) ---
+        let linea = self.expandir_comodines(&linea_original);
         let partes: Vec<&str> = linea.splitn(3, ' ').collect();
         match partes[0] {
             "help" => {
@@ -678,12 +686,12 @@ impl EstadoShell {
                 } else {
                     let mut p = PANTALLA_GLOBAL.lock();
                     p.cambiar_color(Color::CianClaro, Color::Negro);
-                    p.escribir_texto("MELAC_OS Server v2.0 - Comandos basicos:\n");
+                    p.escribir_texto("MELAC_OS Server v3.1 - Comandos basicos:\n");
                     p.cambiar_color(Color::Blanco, Color::Negro);
                     p.escribir_texto("  Archivos : ls, cd, pwd, mkdir, touch, edit, cat, head, tail, wc, cp, mv, rm\n");
                     p.escribir_texto("             grep [-r], echo, find, tree, stat, file, hexdump, du\n");
                     p.escribir_texto("  Sistema  : view_resources, dmesg, df, free, lscpu, date, time, env\n");
-                    p.escribir_texto("  Extras   : history [-c], nano, cowsay, fortune, install, reboot, shutdown\n");
+                    p.escribir_texto("  Extras   : history [-c], calc, ps, cowsay, fortune, install, reboot, shutdown\n");
                     p.cambiar_color(Color::Amarillo, Color::Negro);
                     p.escribir_texto("Escribe 'help <comando>' para detalles o 'cat ~/manual_comandos.txt'\n");
                     p.cambiar_color(Color::VerdeClaro, Color::Negro);
@@ -699,7 +707,7 @@ impl EstadoShell {
                 {
                     let mut p = PANTALLA_GLOBAL.lock();
                     p.cambiar_color(Color::Amarillo, Color::Negro);
-                    p.escribir_texto("Formateando /dev/hdb1 (MELACFS3) e instalando melac_os Server v2.0...\n");
+                    p.escribir_texto("Formateando /dev/hdb1 (MELACFS3) e instalando melac_os Server v3.1...\n");
                 }
                 match instalar_en_disco_duro() {
                     Ok(n) => {
@@ -916,24 +924,48 @@ impl EstadoShell {
             "ls" => {
                 // ls [-l] [ruta]
                 let mut modo_largo = false;
-                let mut ruta_arg: Option<&str> = None;
+                let mut rutas_a_listar: Vec<String> = Vec::new();
                 if partes.len() >= 2 {
-                    if partes[1] == "-l" {
-                        modo_largo = true;
-                        if partes.len() >= 3 { ruta_arg = Some(partes[2]); }
+                    if partes[1].starts_with('-') {
+                        modo_largo = partes[1].contains('l');
+                        if partes.len() >= 3 {
+                            for r in partes[2].split_whitespace() { rutas_a_listar.push(String::from(r)); }
+                        }
                     } else {
-                        ruta_arg = Some(partes[1]);
+                        for r in partes[1].split_whitespace() { rutas_a_listar.push(String::from(r)); }
+                        if partes.len() >= 3 {
+                            for r in partes[2].split_whitespace() { rutas_a_listar.push(String::from(r)); }
+                        }
                     }
                 }
-                let dir_objetivo = match ruta_arg {
-                    Some(r) => resolver_ruta(r),
-                    None => DIRECTORIO_ACTUAL.lock().clone(),
-                };
+                if rutas_a_listar.is_empty() {
+                    rutas_a_listar.push(DIRECTORIO_ACTUAL.lock().clone());
+                }
                 let nodos = SISTEMA_ARCHIVOS.lock();
                 let mut p = PANTALLA_GLOBAL.lock();
                 let mut encontrados = 0;
                 let mut primero = true;
-                for nodo in nodos.iter() {
+                for ruta in rutas_a_listar {
+                    let dir_objetivo = resolver_ruta(&ruta);
+                    
+                    // Si es un archivo exacto, lo mostramos directamente
+                    if let Some(nodo_exacto) = nodos.iter().find(|n| n.ruta == dir_objetivo) {
+                        if nodo_exacto.tipo == TipoNodo::Archivo {
+                            p.cambiar_color(Color::Blanco, Color::Negro);
+                            if modo_largo {
+                                let _ = writeln!(p, "-rw-r--r--  usuario  {:>5} B   {}", nodo_exacto.contenido.len(), nombre_base(&nodo_exacto.ruta));
+                            } else {
+                                if !primero { p.escribir_texto("  "); }
+                                let _ = write!(p, "{}", nombre_base(&nodo_exacto.ruta));
+                                primero = false;
+                            }
+                            encontrados += 1;
+                            continue;
+                        }
+                    }
+
+                    // Si es un directorio, listamos sus hijos
+                    for nodo in nodos.iter() {
                     if nodo.ruta == "/" { continue; }
                     if carpeta_padre(&nodo.ruta) != dir_objetivo { continue; }
                     encontrados += 1;
@@ -960,6 +992,7 @@ impl EstadoShell {
                             }
                         }
                     }
+                }
                 }
                 if encontrados == 0 {
                     p.cambiar_color(Color::GrisClaro, Color::Negro);
@@ -1127,13 +1160,22 @@ impl EstadoShell {
                 let mut p = PANTALLA_GLOBAL.lock();
                 if partes.len() < 2 {
                     p.cambiar_color(Color::RojoClaro, Color::Negro);
-                    p.escribir_texto("Uso: cat <ruta_archivo>\n");
-                } else if let Some(texto) = leer_archivo(partes[1]) {
-                    p.cambiar_color(Color::Blanco, Color::Negro);
-                    let _ = writeln!(p, "{}", texto);
+                    p.escribir_texto("Uso: cat <archivo1> [archivo2...]\n");
                 } else {
-                    p.cambiar_color(Color::RojoClaro, Color::Negro);
-                    let _ = writeln!(p, "Error: No existe '{}'.", partes[1]);
+                    let mut rutas = Vec::new();
+                    for r in partes[1].split_whitespace() { rutas.push(r); }
+                    if partes.len() >= 3 {
+                        for r in partes[2].split_whitespace() { rutas.push(r); }
+                    }
+                    for ruta in rutas {
+                        if let Some(texto) = leer_archivo(ruta) {
+                            p.cambiar_color(Color::Blanco, Color::Negro);
+                            let _ = writeln!(p, "{}", texto);
+                        } else {
+                            p.cambiar_color(Color::RojoClaro, Color::Negro);
+                            let _ = writeln!(p, "Error: No existe '{}'.", ruta);
+                        }
+                    }
                 }
                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
@@ -1141,16 +1183,19 @@ impl EstadoShell {
                 let mut p = PANTALLA_GLOBAL.lock();
                 if partes.len() < 2 {
                     p.cambiar_color(Color::RojoClaro, Color::Negro);
-                    p.escribir_texto("Uso: rm <ruta>\n");
+                    p.escribir_texto("Uso: rm <ruta1> [ruta2...]\n");
                 } else {
-                    match borrar_nodo(partes[1]) {
-                        Ok(()) => {
-                            p.cambiar_color(Color::Amarillo, Color::Negro);
-                            let _ = writeln!(p, "Eliminado '{}'.", partes[1]);
-                        }
-                        Err(e) => {
-                            p.cambiar_color(Color::RojoClaro, Color::Negro);
-                            let _ = writeln!(p, "rm: {}", e);
+                    let args: Vec<&str> = linea[3..].split_whitespace().collect();
+                    for arg in args {
+                        match borrar_nodo(arg) {
+                            Ok(()) => {
+                                p.cambiar_color(Color::Amarillo, Color::Negro);
+                                let _ = writeln!(p, "Eliminado '{}'.", arg);
+                            }
+                            Err(e) => {
+                                p.cambiar_color(Color::RojoClaro, Color::Negro);
+                                let _ = writeln!(p, "rm: {}: {}", arg, e);
+                            }
                         }
                     }
                 }
@@ -1366,16 +1411,6 @@ impl EstadoShell {
                 }
                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
-            "nano" => {
-                if partes.len() < 2 {
-                    let mut p = PANTALLA_GLOBAL.lock();
-                    p.cambiar_color(Color::RojoClaro, Color::Negro);
-                    p.escribir_texto("Uso: nano <archivo>\n");
-                    p.cambiar_color(Color::VerdeClaro, Color::Negro);
-                } else {
-                    self.abrir_editor(partes[1]);
-                }
-            }
             "cowsay" => {
                 let texto = if partes.len() >= 2 {
                     let mut s = String::new();
@@ -1415,6 +1450,99 @@ impl EstadoShell {
                 let _ = writeln!(p, "\"{}\"", frases[idx]);
                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
+            "calc" => {
+                let mut p = PANTALLA_GLOBAL.lock();
+                if partes.len() < 3 {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    p.escribir_texto("Uso: calc <num1> <op> <num2>  (ej: calc 5 + 3)\n");
+                } else if let Ok(n1) = partes[1].parse::<i64>() {
+                    let resto: Vec<&str> = partes[2].split_whitespace().collect();
+                    if resto.len() >= 2 {
+                        if let Ok(n2) = resto[1].parse::<i64>() {
+                            let res = match resto[0] {
+                                "+" => Some(n1 + n2),
+                                "-" => Some(n1 - n2),
+                                "*" | "x" => Some(n1 * n2),
+                                "/" => if n2 != 0 { Some(n1 / n2) } else { None },
+                                _ => None,
+                            };
+                            p.cambiar_color(Color::CianClaro, Color::Negro);
+                            if let Some(r) = res {
+                                let _ = writeln!(p, "  {} {} {} = {}", n1, resto[0], n2, r);
+                            } else {
+                                p.cambiar_color(Color::RojoClaro, Color::Negro);
+                                p.escribir_texto("Error: operacion invalida o division por cero.\\n");
+                            }
+                        } else {
+                            p.cambiar_color(Color::RojoClaro, Color::Negro);
+                            p.escribir_texto("Error: segundo numero invalido.\\n");
+                        }
+                    } else {
+                        p.cambiar_color(Color::RojoClaro, Color::Negro);
+                        p.escribir_texto("Uso: calc <num1> <op> <num2>\\n");
+                    }
+                } else {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    p.escribir_texto("Error: primer numero invalido.\\n");
+                }
+                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+            }
+            "ps" => {
+                let mut p = PANTALLA_GLOBAL.lock();
+                p.cambiar_color(Color::CianClaro, Color::Negro);
+                let _ = writeln!(p, "  PID TTY          TIME CMD");
+                p.cambiar_color(Color::Blanco, Color::Negro);
+                if let Some(tareas) = PLANIFICADOR.try_lock() {
+                    for t in tareas.iter() {
+                        let _ = writeln!(p, "  {:>3} tty1      {:>8} {}", t.pid, t.tics_cpu, t.nombre);
+                    }
+                }
+                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+            }
+            "uptime" => {
+                let tics = TICS_RELOJ.load(Ordering::Relaxed);
+                let segundos = (tics * 10) / 182;
+                let mut p = PANTALLA_GLOBAL.lock();
+                p.cambiar_color(Color::CianClaro, Color::Negro);
+                let _ = writeln!(p, "Uptime: {} segundos ({} tics de CPU)", segundos, tics);
+                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+            }
+            "sort" => {
+                let mut p = PANTALLA_GLOBAL.lock();
+                if partes.len() < 2 {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    p.escribir_texto("Uso: sort <archivo>\n");
+                } else if let Some(contenido) = leer_archivo(partes[1]) {
+                    let mut lineas: Vec<&str> = contenido.lines().collect();
+                    lineas.sort();
+                    p.cambiar_color(Color::Blanco, Color::Negro);
+                    for l in lineas { let _ = writeln!(p, "{}", l); }
+                } else {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    let _ = writeln!(p, "sort: No existe '{}'", partes[1]);
+                }
+                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+            }
+            "uniq" => {
+                let mut p = PANTALLA_GLOBAL.lock();
+                if partes.len() < 2 {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    p.escribir_texto("Uso: uniq <archivo>\n");
+                } else if let Some(contenido) = leer_archivo(partes[1]) {
+                    p.cambiar_color(Color::Blanco, Color::Negro);
+                    let mut anterior = "";
+                    for l in contenido.lines() {
+                        if l != anterior {
+                            let _ = writeln!(p, "{}", l);
+                            anterior = l;
+                        }
+                    }
+                } else {
+                    p.cambiar_color(Color::RojoClaro, Color::Negro);
+                    let _ = writeln!(p, "uniq: No existe '{}'", partes[1]);
+                }
+                p.cambiar_color(Color::VerdeClaro, Color::Negro);
+            }
             otro => {
                 let mut p = PANTALLA_GLOBAL.lock();
                 p.cambiar_color(Color::RojoClaro, Color::Negro);
@@ -1422,6 +1550,203 @@ impl EstadoShell {
                 p.cambiar_color(Color::VerdeClaro, Color::Negro);
             }
         }
+    }
+    // ========= EXPANSIÓN DE COMODINES (*) =========
+    fn expandir_comodines(&self, linea: &str) -> String {
+        let mut resultado = String::new();
+        for palabra in linea.split_whitespace() {
+            if palabra.contains('*') {
+                let patron = palabra.replace('*', "");
+                let dir_actual = DIRECTORIO_ACTUAL.lock().clone();
+                let mut coincidencias = Vec::new();
+                if let Some(nodos) = SISTEMA_ARCHIVOS.try_lock() {
+                    for n in nodos.iter() {
+                        if carpeta_padre(&n.ruta) == dir_actual && nombre_base(&n.ruta).contains(&patron) {
+                            coincidencias.push(nombre_base(&n.ruta).to_string());
+                        }
+}
+
+// ========= HELPER: arbol recursivo para el comando tree =========
+
+                }
+                if coincidencias.is_empty() {
+                    resultado.push_str(palabra);
+                    resultado.push(' ');
+                } else {
+                    coincidencias.sort();
+                    for c in coincidencias {
+                        resultado.push_str(&c);
+                        resultado.push(' ');
+                    }
+                }
+            } else {
+                resultado.push_str(palabra);
+                resultado.push(' ');
+            }
+        }
+        resultado.trim().to_string()
+    }
+
+    // ========= PIPELINES (|) =========
+    fn ejecutar_pipeline(&mut self, linea: &str) {
+        let comandos: Vec<&str> = linea.split('|').map(|s| s.trim()).collect();
+        let mut buffer = String::new();
+
+        for (i, cmd) in comandos.iter().enumerate() {
+            // ¡AQUÍ ESTÁ LA MAGIA! Expandimos los comodines (*) ANTES de ejecutar el comando
+            let cmd_expandido = self.expandir_comodines(cmd);
+            let partes: Vec<&str> = cmd_expandido.splitn(3, ' ').collect();
+            if partes.is_empty() { continue; }
+            let nombre = partes[0];
+
+            if i == 0 {
+                // --- COMANDOS DE ORIGEN ---
+                match nombre {
+                    "cat" if partes.len() >= 2 => {
+                        let mut rutas = Vec::new();
+                        for r in partes[1].split_whitespace() { rutas.push(r); }
+                        if partes.len() >= 3 {
+                            for r in partes[2].split_whitespace() { rutas.push(r); }
+                        }
+                        for ruta in rutas {
+                            if let Some(texto) = leer_archivo(ruta) {
+                                buffer.push_str(&texto);
+                                if !texto.ends_with('\n') { buffer.push('\n'); }
+                            }
+                        }
+                    }
+                    "echo" => {
+                        buffer = if partes.len() >= 2 {
+                            let mut e = String::new();
+                            for p in partes[1..].iter() { e.push_str(p); e.push(' '); }
+                            e.trim().to_string()
+                        } else { String::new() };
+                    }
+                    "ls" => {
+                        let mut rutas = Vec::new();
+                        if partes.len() >= 2 {
+                            for r in partes[1].split_whitespace() { rutas.push(r); }
+                            if partes.len() >= 3 {
+                                for r in partes[2].split_whitespace() { rutas.push(r); }
+                            }
+                        }
+                        if rutas.is_empty() {
+                            let dir_actual = DIRECTORIO_ACTUAL.lock().clone();
+                            if let Some(nodos) = SISTEMA_ARCHIVOS.try_lock() {
+                                for n in nodos.iter() {
+                                    if carpeta_padre(&n.ruta) == dir_actual {
+                                        buffer.push_str(nombre_base(&n.ruta));
+                                        buffer.push('\n');
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Some(nodos) = SISTEMA_ARCHIVOS.try_lock() {
+                                for r in rutas {
+                                    let dir = resolver_ruta(r);
+                                    if let Some(n) = nodos.iter().find(|n| n.ruta == dir) {
+                                        buffer.push_str(nombre_base(&n.ruta));
+                                        buffer.push('\n');
+                                    } else {
+                                        let mut tiene_hijos = false;
+                                        for n in nodos.iter() {
+                                            if carpeta_padre(&n.ruta) == dir {
+                                                buffer.push_str(nombre_base(&n.ruta));
+                                                buffer.push('\n');
+                                                tiene_hijos = true;
+                                            }
+                                        }
+                                        if !tiene_hijos { buffer.push_str(r); buffer.push('\n'); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let mut p = PANTALLA_GLOBAL.lock();
+                        p.cambiar_color(Color::RojoClaro, Color::Negro);
+                        let _ = writeln!(p, "Error: comando '{}' no soportado como origen de tuberia.", nombre);
+                        p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                        return;
+                    }
+                }
+            } else {
+                // --- COMANDOS DE FILTRO ---
+                match nombre {
+                    "grep" if partes.len() >= 2 => {
+                        let patron = partes[1];
+                        let mut filtrado = String::new();
+                        for l in buffer.lines() {
+                            if l.contains(patron) {
+                                filtrado.push_str(l);
+                                filtrado.push('\n');
+                            }
+                        }
+                        buffer = filtrado;
+                    }
+                    "wc" => {
+                        let lineas = buffer.lines().count();
+                        let palabras = buffer.split_whitespace().count();
+                        let bytes = buffer.len();
+                        buffer = format!("{:>5} {:>5} {:>5}\n", lineas, palabras, bytes);
+                    }
+                    "sort" => {
+                        let mut lineas: Vec<&str> = buffer.lines().collect();
+                        lineas.sort();
+                        let mut nuevo = String::new();
+                        for l in lineas { nuevo.push_str(l); nuevo.push('\n'); }
+                        buffer = nuevo;
+                    }
+                    "uniq" => {
+                        let mut nuevo = String::new();
+                        let mut anterior = "";
+                        for l in buffer.lines() {
+                            if l != anterior {
+                                nuevo.push_str(l);
+                                nuevo.push('\n');
+                                anterior = l;
+                            }
+                        }
+                        buffer = nuevo;
+                    }
+                    "head" => {
+                        let mut filtrado = String::new();
+                        for (j, l) in buffer.lines().enumerate() {
+                            if j >= 10 { break; }
+                            filtrado.push_str(l);
+                            filtrado.push('\n');
+                        }
+                        buffer = filtrado;
+                    }
+                    "tail" => {
+                        let lineas: Vec<&str> = buffer.lines().collect();
+                        let inicio = if lineas.len() > 10 { lineas.len() - 10 } else { 0 };
+                        let mut filtrado = String::new();
+                        for l in &lineas[inicio..] {
+                            filtrado.push_str(l);
+                            filtrado.push('\n');
+                        }
+                        buffer = filtrado;
+                    }
+                    _ => {
+                        let mut p = PANTALLA_GLOBAL.lock();
+                        p.cambiar_color(Color::RojoClaro, Color::Negro);
+                        let _ = writeln!(p, "Error: comando '{}' no soportado como filtro.", nombre);
+                        p.cambiar_color(Color::VerdeClaro, Color::Negro);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Mostrar el resultado final
+        let mut p = PANTALLA_GLOBAL.lock();
+        p.cambiar_color(Color::Blanco, Color::Negro);
+        let _ = write!(p, "{}", buffer);
+        if !buffer.ends_with('\n') && !buffer.is_empty() {
+            p.nueva_linea(1);
+        }
+        p.cambiar_color(Color::VerdeClaro, Color::Negro);
     }
 }
 
@@ -1436,13 +1761,13 @@ fn dibujar_arbol(
     let n = hijos.len();
     for (i, nodo) in hijos.iter().enumerate() {
         let ultimo = i == n - 1;
-        let conector = if ultimo { "└── " } else { "├── " };
+        let conector = if ultimo { "\\-- " } else { "|-- " };
         let nombre = nombre_base(&nodo.ruta);
         match nodo.tipo {
             TipoNodo::Directorio => {
                 p.cambiar_color(Color::AzulClaro, Color::Negro);
                 let _ = writeln!(p, "{}{}{}/", prefijo, conector, nombre);
-                let extension = if ultimo { "    " } else { "│   " };
+                let extension = if ultimo { "    " } else { "|   " };
                 let nuevo_prefijo = format!("{}{}", prefijo, extension);
                 dibujar_arbol(p, &nodo.ruta, &nuevo_prefijo, contador);
             }

@@ -70,11 +70,11 @@ pub fn instalar_en_disco_duro() -> Result<usize, &'static str> {
         nodos.push(NodoFS {
             ruta: String::from("/home/usuario/bienvenida.txt"),
             tipo: TipoNodo::Archivo,
-            contenido: String::from("Bienvenido a melac_os Server v2.0! Lee manual_comandos.txt para ver toda la guia."),
+            contenido: String::from("Bienvenido a melac_os Server v3.1! Lee manual_comandos.txt para ver toda la guia."),
         });
 
         let manual = concat!(
-            "=== MANUAL OFICIAL DE COMANDOS MELAC_OS SERVER v2.0 ===\n",
+            "=== MANUAL OFICIAL DE COMANDOS MELAC_OS SERVER v3.1 ===\n",
             "1. NAVEGACION Y ARCHIVOS (Soporta '~' para /home/usuario):\n",
             "   ls [-l] [ruta]      - Lista archivos (usa -l para formato detallado)\n",
             "   cd <ruta>           - Cambia de directorio (ej: cd ~, cd .., cd /etc)\n",
